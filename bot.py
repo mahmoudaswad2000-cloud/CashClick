@@ -200,7 +200,7 @@ async def confirm_ad_handler(callback: types.CallbackQuery):
   else:
     click_streak = 0
 
-  new_balance = user[1] + 3.33
+  new_balance = user[1] + 0.5
   new_ads = user[2] + 1
 
   cursor.execute(
