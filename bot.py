@@ -11,35 +11,21 @@ AD_URL = "https://uplcm.com/4/11968073"
 
 user_ad_status = {}
 
-# دالة حفظ وتتبع المشتركين مع اليوزر نايم والاسم
-def save_user(user):
-    user_id = user.id
-    username = f"@{user.username}" if user.username else "NoUsername"
-    first_name = user.first_name if user.first_name else ""
-    last_name = f" {user.last_name}" if user.last_name else ""
-    full_name = f"{first_name}{last_name}".strip() or "NoName"
-    
-    user_entry = f"{user_id} | {username} | {full_name}"
-    
-    existing_ids = set()
+def save_user(user_id):
+    users = set()
     if os.path.exists('users.txt'):
-        with open('users.txt', 'r', encoding='utf-8') as f:
-            for line in f:
-                if '|' in line:
-                    existing_ids.add(line.split('|')[0].strip())
-                elif line.strip():
-                    existing_ids.add(line.strip())
-
-    if str(user_id) not in existing_ids:
-        with open('users.txt', 'a', encoding='utf-8') as f:
-            f.write(f"{user_entry}\n")
+        with open('users.txt', 'r') as f:
+            users = set(line.strip() for line in f if line.strip())
+    
+    if str(user_id) not in users:
+        with open('users.txt', 'a') as f:
+            f.write(f"{user_id}\n")
 
 def get_users_count():
     if not os.path.exists('users.txt'):
         return 0
-    with open('users.txt', 'r', encoding='utf-8') as f:
-        lines = [line.strip() for line in f if line.strip()]
-        return len(lines)
+    with open('users.txt', 'r') as f:
+        return len(set(line.strip() for line in f if line.strip()))
 
 @bot.message_handler(commands=['stats'])
 def show_stats(message):
@@ -48,9 +34,9 @@ def show_stats(message):
 
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
-    user = message.from_user
-    save_user(user)
-    user_ad_status[user.id] = False 
+    user_id = message.from_user.id
+    save_user(user_id)
+    user_ad_status[user_id] = False 
     
     markup = InlineKeyboardMarkup()
     markup.add(InlineKeyboardButton("🔗 1. تابعنا على إنستغرام (@mah__asw)", url=INSTAGRAM_URL))
@@ -79,9 +65,8 @@ def after_instagram(call):
 
 @bot.message_handler(func=lambda message: True)
 def handle_download(message):
-    user = message.from_user
-    user_id = user.id
-    save_user(user)
+    user_id = message.from_user.id
+    save_user(user_id)
     text = message.text.strip()
     
     if text.startswith('http'):
