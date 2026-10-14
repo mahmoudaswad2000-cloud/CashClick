@@ -1,289 +1,139 @@
-import asyncio
-import logging
-import sqlite3
-import time
-from aiogram import Bot, Dispatcher, F, types
-from aiogram.filters import Command
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+import os
+import telebot
+import yt_dlp
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-# التوكن الجديد الخاص بك
-API_TOKEN = "8845579928:AAGOSVEYrB1q-xmVYvn5t2ADpcg8Frort9w"
-MONETAG_LINK = "https://uplcm.com/4/11967886"
+TOKEN = "8823255880:AAHEzXAbs1q1EZZoH2lbWjQEVXPlInHBzno"
+bot = telebot.TeleBot(TOKEN)
 
-bot = Bot(token=API_TOKEN)
-dp = Dispatcher()
-logging.basicConfig(level=logging.INFO)
+INSTAGRAM_URL = "https://www.instagram.com/mah__asw?psln=bHVtbTd0NGVkaWh2"
+AD_URL = "https://uplcm.com/4/11968073"
 
-# ==================== إعداد قاعدة البيانات (SQLite) ====================
-conn = sqlite3.connect("cashclick_bot.db")
-cursor = conn.cursor()
+user_ad_status = {}
 
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS users (
-    user_id INTEGER PRIMARY KEY,
-    balance REAL DEFAULT 0.0,
-    ads_today INTEGER DEFAULT 0,
-    referrals INTEGER DEFAULT 0,
-    invited_by INTEGER,
-    last_click_time REAL DEFAULT 0,
-    click_streak INTEGER DEFAULT 0,
-    is_banned INTEGER DEFAULT 0
-)
-""")
-conn.commit()
+# دالة حفظ وتتبع المشتركين مع اليوزر نايم والاسم
+def save_user(user):
+    user_id = user.id
+    username = f"@{user.username}" if user.username else "NoUsername"
+    first_name = user.first_name if user.first_name else ""
+    last_name = f" {user.last_name}" if user.last_name else ""
+    full_name = f"{first_name}{last_name}".strip() or "NoName"
+    
+    user_entry = f"{user_id} | {username} | {full_name}"
+    
+    existing_ids = set()
+    if os.path.exists('users.txt'):
+        with open('users.txt', 'r', encoding='utf-8') as f:
+            for line in f:
+                if '|' in line:
+                    existing_ids.add(line.split('|')[0].strip())
+                elif line.strip():
+                    existing_ids.add(line.strip())
 
+    if str(user_id) not in existing_ids:
+        with open('users.txt', 'a', encoding='utf-8') as f:
+            f.write(f"{user_entry}\n")
 
-def get_user(user_id):
-  cursor.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
-  return cursor.fetchone()
+def get_users_count():
+    if not os.path.exists('users.txt'):
+        return 0
+    with open('users.txt', 'r', encoding='utf-8') as f:
+        lines = [line.strip() for line in f if line.strip()]
+        return len(lines)
 
+@bot.message_handler(commands=['stats'])
+def show_stats(message):
+    count = get_users_count()
+    bot.reply_to(message, f"📊 **إحصائيات البوت:**\n\nعدد المستخدِمين الإجمالي: **{count}** مستخدم.")
 
-def add_user(user_id, invited_by=None):
-  if not get_user(user_id):
-    cursor.execute(
-        "INSERT INTO users (user_id, invited_by) VALUES (?, ?)",
-        (user_id, invited_by),
+@bot.message_handler(commands=['start', 'help'])
+def send_welcome(message):
+    user = message.from_user
+    save_user(user)
+    user_ad_status[user.id] = False 
+    
+    markup = InlineKeyboardMarkup()
+    markup.add(InlineKeyboardButton("🔗 1. تابعنا على إنستغرام (@mah__asw)", url=INSTAGRAM_URL))
+    markup.add(InlineKeyboardButton("✅ 2. تم الاشتراك، متابعة", callback_data="done_insta"))
+    
+    bot.send_message(
+        message.chat.id,
+        "مرحباً بك في بوت تحميل الفيديوهات الشامل! 🚀\n\nيدعم البوت التحميل من جميع المنصات.\n\nللبدء، يرجى متابعة حسابنا على الإنستغرام أولاً ثم الضغط على زر التأكيد أدناه:",
+        reply_markup=markup
     )
-    conn.commit()
 
-
-# ==================== القوائم التفاعلية ====================
-def main_menu():
-  return InlineKeyboardMarkup(
-      inline_keyboard=[
-          [
-              InlineKeyboardButton(
-                  text="📺 مشاهدة الإعلانات المربحة", callback_data="watch_ads"
-              )
-          ],
-          [
-              InlineKeyboardButton(
-                  text="💰 رصيدي وإحصائياتي", callback_data="profile"
-              )
-          ],
-          [
-              InlineKeyboardButton(
-                  text="👥 دعوة أصدقاء (الإحالات)", callback_data="referral"
-              )
-          ],
-          [InlineKeyboardButton(text="💸 طلب سحب الأرباح", callback_data="withdraw")],
-      ]
-  )
-
-
-def back_to_home():
-  return InlineKeyboardMarkup(
-      inline_keyboard=[
-          [InlineKeyboardButton(text="🔙 القائمة الرئيسية", callback_data="main_menu")]
-      ]
-  )
-
-
-# ==================== الأوامر والأحداث ====================
-@dp.message(Command("start"))
-async def cmd_start(message: types.Message):
-  user_id = message.from_user.id
-
-  args = message.text.split()
-  invited_by = None
-  if len(args) > 1 and args[1].startswith("ref_"):
-    try:
-      potential_inviter = int(args[1].replace("ref_", ""))
-      if potential_inviter != user_id:
-        invited_by = potential_inviter
-    except ValueError:
-      pass
-
-  if not get_user(user_id):
-    add_user(user_id, invited_by)
-    if invited_by and get_user(invited_by):
-      cursor.execute(
-          "UPDATE users SET referrals = referrals + 1 WHERE user_id = ?",
-          (invited_by,),
-      )
-      conn.commit()
-
-  user = get_user(user_id)
-  if user and user[7] == 1:
-    await message.answer(
-        "⛔ عذراً، تم حظرك نهائياً من البوت بسبب اكتشاف نشاط مشبوه."
+@bot.callback_query_handler(func=lambda call: call.data == "done_insta")
+def after_instagram(call):
+    user_id = call.from_user.id
+    user_ad_status[user_id] = False
+    
+    markup = InlineKeyboardMarkup()
+    markup.add(InlineKeyboardButton("📢 اضغط هنا لمشاهدة الإعلان لفتح التحميل", url=AD_URL))
+    
+    bot.edit_message_text(
+        "ممتاز! تم تأكيد المتابعة بنجاح ✅\n\nالآن لتحميل أي فيديو، اضغط على زر الإعلان أدناه لفتحه، ثم أرسل رابط الفيديو مباشرة:",
+        call.message.chat.id,
+        call.message.message_id,
+        reply_markup=markup
     )
-    return
 
-  welcome_text = (
-      f"🌟 **أهلاً بك في بوت CashClick | ربح الأقوياء!** 🌟\n\n"
-      f"🎮 اجمع أرباحك يومياً عبر مشاهدة الإعلانات واسحبها بسهولة عند إتمام الشروط:\n\n"
-      f"🎯 **شروط البوت:**\n"
-      f"• الحد الأدنى للسحب: **200 دولار**.\n"
-      f"• شرط فتح السحب: دعوة **25 إحالة** حقيقية.\n\n"
-      f"اختر ما يناسبك من القائمة أدناه:"
-  )
-  await message.answer(welcome_text, reply_markup=main_menu())
+@bot.message_handler(func=lambda message: True)
+def handle_download(message):
+    user = message.from_user
+    user_id = user.id
+    save_user(user)
+    text = message.text.strip()
+    
+    if text.startswith('http'):
+        if not user_ad_status.get(user_id, False):
+            user_ad_status[user_id] = True
+            markup = InlineKeyboardMarkup()
+            markup.add(InlineKeyboardButton("📢 اضغط هنا لمشاهدة الإعلان أولاً", url=AD_URL))
+            
+            bot.reply_to(
+                message,
+                "⚠️ عذراً! لا يمكنك تحميل الفيديو حتى تضغط على زر الإعلان أدناه أولاً:",
+                reply_markup=markup
+            )
+            return
 
+        user_ad_status[user_id] = False
 
-@dp.callback_query(F.data == "main_menu")
-async def main_menu_cb(callback: types.CallbackQuery):
-  user = get_user(callback.from_user.id)
-  if user and user[7] == 1:
-    return await callback.answer("حسابك محظور!", show_alert=True)
+        file_name = f"video_{user_id}.mp4"
+        msg = bot.reply_to(message, "⏳ جاري تحميل الفيديو، يرجى الانتظار...")
+        try:
+            ydl_opts = {
+                'outtmpl': file_name,
+                'format': 'best/bestvideo+bestaudio/best',
+                'max_filesize': 50 * 1024 * 1024,
+                'http_headers': {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                },
+            }
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([text])
 
-  await callback.message.edit_text(
-      "🏠 **القائمة الرئيسية لـ CashClick:**", reply_markup=main_menu()
-  )
-  await callback.answer()
+            if os.path.exists(file_name):
+                with open(file_name, 'rb') as vid:
+                    bot.send_video(message.chat.id, vid)
+                bot.delete_message(message.chat.id, msg.message_id)
 
+            markup = InlineKeyboardMarkup()
+            markup.add(InlineKeyboardButton("📢 مشاهدة الإعلان لتحميل فيديو آخر", url=AD_URL))
+            
+            bot.send_message(
+                message.chat.id,
+                "💡 لتحميل فيديو آخر، اضغط على زر الإعلان أدناه أولاً ثم أرسل الرابط:",
+                reply_markup=markup
+            )
 
-@dp.callback_query(F.data == "watch_ads")
-async def watch_ads_handler(callback: types.CallbackQuery):
-  user_id = callback.from_user.id
-  user = get_user(user_id)
-
-  if user[7] == 1:
-    return await callback.answer("حسابك محظور!", show_alert=True)
-
-  ad_kb = InlineKeyboardMarkup(
-      inline_keyboard=[
-          [InlineKeyboardButton(text="🔗 اضغط هنا لفتح الإعلان", url=MONETAG_LINK)],
-          [
-              InlineKeyboardButton(
-                  text="✅ تأكيد مشاهدة الإعلان", callback_data="confirm_ad"
-              )
-          ],
-          [InlineKeyboardButton(text="🔙 القائمة الرئيسية", callback_data="main_menu")],
-      ]
-  )
-
-  await callback.message.edit_text(
-      "📺 **قسم مشاهدة الإعلانات اليومية:**\n\n"
-      "1️⃣ اضغط على زر (فتح الإعلان).\n"
-      "2️⃣ انتظر قليلاً في صفحة الإعلان ثم عُد إلى هنا.\n"
-      "3️⃣ اضغط على (تأكيد مشاهدة الإعلان) لتستلم رصيدك.",
-      reply_markup=ad_kb,
-  )
-  await callback.answer()
-
-
-@dp.callback_query(F.data == "confirm_ad")
-async def confirm_ad_handler(callback: types.CallbackQuery):
-  user_id = callback.from_user.id
-  user = get_user(user_id)
-
-  if user[7] == 1:
-    return await callback.answer("حسابك محظور!", show_alert=True)
-
-  current_time = time.time()
-  last_click = user[5]
-  click_streak = user[6]
-
-  if current_time - last_click < 6:
-    click_streak += 1
-    if click_streak >= 3:
-      cursor.execute(
-          "UPDATE users SET is_banned = 1 WHERE user_id = ?", (user_id,)
-      )
-      conn.commit()
-      await callback.message.edit_text(
-          "🚨 **تم اكتشاف نشاط روبوت (Auto-Clicker) أو نقر وهمي!**\n\n"
-          "تم حظرك نهائياً من استخدام البوت لمخالفة القوانين."
-      )
-      return
+        except Exception as e:
+            user_ad_status[user_id] = True
+            bot.edit_message_text("❌ متعذر التحميل حالياً من هذا الرابط بسبب قيود المنصة (تأكد من أن الحساب عام وغير خاص).", message.chat.id, msg.message_id)
+        finally:
+            if os.path.exists(file_name):
+                os.remove(file_name)
     else:
-      cursor.execute(
-          "UPDATE users SET click_streak = ? WHERE user_id = ?",
-          (click_streak, user_id),
-      )
-      conn.commit()
-      await callback.answer(
-          "⚠️ تحذير: أنت تنقر بسرعة كبيرة جداً! انتظر قليلاً.", show_alert=True
-      )
-      return
-  else:
-    click_streak = 0
+        bot.reply_to(message, "الرجاء إرسال رابط فيديو صالح يبدأ بـ http أو إرسال /start للبدء.")
 
-  new_balance = user[1] + 0.5
-  new_ads = user[2] + 1
-
-  cursor.execute(
-      "UPDATE users SET balance = ?, ads_today = ?, last_click_time = ?,"
-      " click_streak = ? WHERE user_id = ?",
-      (new_balance, new_ads, current_time, click_streak, user_id),
-  )
-  conn.commit()
-
-  await callback.answer("🎉 تم احتساب الإعلان بنجاح وأُضيف الرصيد!", show_alert=True)
-  await callback.message.edit_text(
-      f"📊 **إحصائياتك اليومية:**\n"
-      f"• رصيدك الحالي: **${new_balance:.2f} / $200.00**\n"
-      f"• الإعلانات المشاهدة اليوم: {new_ads}/10\n\n"
-      f"واصل العمل يومياً لإتمام مدة الـ 60 يوماً والوصول للهدف!",
-      reply_markup=main_menu(),
-  )
-
-
-@dp.callback_query(F.data == "profile")
-async def profile_handler(callback: types.CallbackQuery):
-  user = get_user(callback.from_user.id)
-  if user[7] == 1:
-    return
-
-  text = (
-      f"👤 **لوحة معلومات حسابك:**\n\n"
-      f"💰 الرصيد المجمع: **${user[1]:.2f} / $200.00**\n"
-      f"👥 عدد الإحالات: **{user[3]} / 25**\n"
-      f"📺 إعلانات اليوم: {user[2]}/10\n\n"
-      f"📌 ملاحظة: زر السحب يتطلب إتمام الشرطين معاً."
-  )
-  await callback.message.edit_text(text, reply_markup=back_to_home())
-  await callback.answer()
-
-
-@dp.callback_query(F.data == "referral")
-async def referral_handler(callback: types.CallbackQuery):
-  user_id = callback.from_user.id
-  user = get_user(user_id)
-  if user[7] == 1:
-    return
-
-  bot_info = await bot.get_me()
-  ref_link = f"https://t.me/{bot_info.username}?start=ref_{user_id}"
-
-  text = (
-      f"👥 **نظام دعوة الأصدقاء (الأرباح المضاعفة):**\n\n"
-      f"• شارك رابطك أدناه مع أصدقائك وفي المجموعات العربية.\n"
-      f"• شرط سحب الأرباح هو تجميع **25 إحالة نشطة**.\n\n"
-      f"🔗 **رابط الدعوة الخاص بك:**\n`{ref_link}`"
-  )
-  await callback.message.edit_text(text, reply_markup=back_to_home())
-  await callback.answer()
-
-
-@dp.callback_query(F.data == "withdraw")
-async def withdraw_handler(callback: types.CallbackQuery):
-  user = get_user(callback.from_user.id)
-  if user[7] == 1:
-    return
-
-  balance = user[1]
-  referrals = user[3]
-
-  if balance < 200 or referrals < 25:
-    await callback.answer(
-        f"❌ لم تستوفِ الشروط بعد!\nالرصيد: {balance}/200$ | الإحالات:"
-        f" {referrals}/25",
-        show_alert=True,
-    )
-    return
-
-  await callback.message.edit_text(
-      "✅ **مبروك لقد أتممت كافة الشروط بنجاح!**\n\n"
-      "أرسل الآن عنوان محفظتك (USDT / Payeer / Binance ID) لإتمام عملية التحويل الوهمية."
-  )
-  await callback.answer()
-
-
-async def main():
-  await dp.start_polling(bot)
-
-
-if __name__ == "__main__":
-  asyncio.run(main())
+bot.infinity_polling(skip_pending=True)
